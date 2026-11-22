@@ -1,0 +1,235 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model ServerKey {
+  name       String   @id // "oppf_ed25519" | "csp_curve25519"
+  publicKey  Bytes
+  privateKey Bytes
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+}
+
+model WorkAccount {
+  id           String     @id @default(cuid())
+  username     String     @unique
+  passwordHash String
+  enabled      Boolean    @default(true)
+  firstName    String?
+  lastName     String?
+  jobTitle     String?
+  department   String?
+  category     String?
+  csi          String?
+  availability String?
+  identities   Identity[]
+  createdAt    DateTime   @default(now())
+  updatedAt    DateTime   @updatedAt
+}
+
+model Identity {
+  id                     String       @id // 8-char uppercase Threema ID
+  publicKey              Bytes        // 32 bytes Curve25519
+  serverGroup            String       @default("0")
+  state                  Int          @default(1) // 1 = ACTIVE, 2 = INACTIVE
+  type                   Int          @default(0) // 0 = REGULAR, 1 = WORK/GATEWAY
+  featureMask            BigInt       @default(0)
+  email                  String?
+  emailHash              String?
+  mobileNo               String?
+  mobileNoHash           String?
+  pendingMobileNo        String?
+  mobileVerifyId         String?
+  mobileVerifyCode       String?
+  revocationKeyHash      String?
+  revocationKeyUpdatedAt DateTime?
+  publicNickname         String?
+  deviceCookie           Bytes?
+  deviceCookieChanged    Boolean        @default(false)
+  lastLoginAt            DateTime?
+  workAccountId          String?
+  workAccount            WorkAccount?   @relation(fields: [workAccountId], references: [id], onDelete: SetNull)
+  workEnabled            Boolean        @default(true)
+  firstName              String?
+  lastName               String?
+  jobTitle               String?
+  department             String?
+  category               String?
+  csi                    String?
+  availability           String?
+  avatar                 Avatar?
+  pushTokens             PushToken[]
+  remoteSecrets          RemoteSecret[]
+  createdAt              DateTime       @default(now())
+  updatedAt              DateTime       @updatedAt
+
+  @@index([emailHash])
+  @@index([mobileNoHash])
+  @@index([workAccountId])
+}
+
+model Challenge {
+  token               String   @id // Base64 32-byte random token
+  purpose             String   // "create" | "fetch_priv" | "blob_cred" | ...
+  identityId          String?
+  clientPublicKey     Bytes?   // Used during identity/create
+  serverEphemeralPriv Bytes    // 32-byte Curve25519 private key
+  expiresAt           DateTime
+  createdAt           DateTime @default(now())
+}
+
+model AuthToken {
+  token      String   @id
+  kind       String   // "legacy" | "blob" | "match"
+  identityId String?
+  username   String?
+  expiresAt  DateTime
+  createdAt  DateTime @default(now())
+}
+
+model QueuedMessage {
+  id           Int      @id @default(autoincrement())
+  fromIdentity String
+  toIdentity   String
+  messageId    Bytes    // 8 bytes
+  rawPayload   Bytes    // Full CSP MessageBox binary payload
+  delivered    Boolean  @default(false)
+  createdAt    DateTime @default(now())
+
+  @@index([toIdentity, delivered])
+  @@index([fromIdentity, messageId])
+}
+
+model BlobItem {
+  id            String   @id // 32-char lowercase hex (16 bytes)
+  scope         String   @default("usual") // "usual" | "local" | "public"
+  deviceGroupId String?
+  persist       Boolean  @default(false)
+  data          Bytes
+  storagePath   String?
+  size          Int      @default(0)
+  doneCount     Int      @default(0)
+  createdAt     DateTime @default(now())
+}
+
+model SafeBackup {
+  backupId  String   @id // 64-char hex (32 bytes)
+  data      Bytes
+  updatedAt DateTime @updatedAt
+}
+
+model Avatar {
+  identityId  String   @id
+  identity    Identity @relation(fields: [identityId], references: [id], onDelete: Cascade)
+  contentType String   @default("image/jpeg")
+  data        Bytes
+  updatedAt   DateTime @updatedAt
+}
+
+model DeviceGroup {
+  dgid                      String           @id // 64-char lowercase hex (32B pubkey)
+  serverGroup               String           @default("0")
+  encryptedSharedDeviceData Bytes
+  nextReflectId             Int              @default(1)
+  devices                   DeviceSlot[]
+  events                    ReflectedEvent[]
+  createdAt                 DateTime         @default(now())
+  updatedAt                 DateTime         @updatedAt
+}
+
+model DeviceSlot {
+  id                  Int         @id @default(autoincrement())
+  dgid                String
+  group               DeviceGroup @relation(fields: [dgid], references: [dgid], onDelete: Cascade)
+  deviceId            String      // uint64 stored as canonical decimal string
+  expirationPolicy    Int         @default(1) // 0=VOLATILE, 1=PERSISTENT
+  encryptedDeviceInfo Bytes
+  minReflectId        Int         @default(1)
+  connectedSince      BigInt?
+  lastDisconnectAt    BigInt?
+  dropped             Boolean     @default(false)
+  createdAt           DateTime    @default(now())
+  updatedAt           DateTime    @updatedAt
+
+  @@unique([dgid, deviceId])
+}
+
+model ReflectedEvent {
+  id             Int         @id @default(autoincrement())
+  dgid           String
+  group          DeviceGroup @relation(fields: [dgid], references: [dgid], onDelete: Cascade)
+  reflectId      Int
+  senderDeviceId String
+  flags          Int
+  timestamp      BigInt
+  envelope       Bytes
+  createdAt      DateTime    @default(now())
+
+  @@unique([dgid, reflectId])
+}
+
+model DeviceReflectionAck {
+  dgid      String
+  deviceId  String
+  reflectId Int
+  ackedAt   DateTime @default(now())
+
+  @@id([dgid, deviceId, reflectId])
+}
+
+model SpamReport {
+  id               Int      @id @default(autoincrement())
+  kind             String   // "contact" | "group"
+  reporterIdentity String
+  payloadJson      String
+  createdAt        DateTime @default(now())
+}
+
+model WorkMdmConfig {
+  id                   String  @id @default("default")
+  override             Boolean @default(false)
+  paramsJson           String  @default("{}")
+  logoLight            String?
+  logoDark             String?
+  logoLightData        Bytes?
+  logoLightContentType String?
+  logoDarkData         Bytes?
+  logoDarkContentType  String?
+  directoryEnabled     Boolean @default(true)
+  categoriesJson       String  @default("{}")
+  orgName              String  @default("OnPrem Organization")
+  support              String?
+  checkInterval        Int     @default(86400)
+  remoteSecretEnabled  Boolean @default(false)
+}
+
+model PushToken {
+  id          Int      @id @default(autoincrement())
+  identityId  String
+  identity    Identity @relation(fields: [identityId], references: [id], onDelete: Cascade)
+  cspDeviceId String   @default("0")
+  priority    String   @default("normal") // "normal" (0x20) | "high" (0x24)
+  tokenType   Int
+  token       Bytes
+  updatedAt   DateTime @updatedAt
+
+  @@unique([identityId, cspDeviceId, priority])
+  @@index([identityId])
+}
+
+model RemoteSecret {
+  authTokenHash String   @id // sha256 hex of 32-byte secretAuthenticationToken
+  identityId    String
+  identity      Identity @relation(fields: [identityId], references: [id], onDelete: Cascade)
+  secret        Bytes
+  blocked       Boolean  @default(false)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@index([identityId])
+}
